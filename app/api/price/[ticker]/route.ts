@@ -7,102 +7,67 @@ export async function GET(
   const { ticker } = await params
   const symbol = ticker.toUpperCase()
 
-  // Try 1: stooq.com — provides PSX (Karachi) stocks with .PK suffix, no auth needed
   try {
-    const res = await fetch(
-      `https://stooq.com/q/l/?s=${symbol.toLowerCase()}.pk&f=sd2t2ohlcvn`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'text/plain,*/*',
-        },
-        next: { revalidate: 0 },
-      }
+    const res = await fetch(`https://dps.psx.com.pk/company/${symbol}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+      },
+      next: { revalidate: 0 },
+    })
+
+    if (!res.ok) {
+      console.error(`[price/${symbol}] PSX HTTP ${res.status}`)
+      return NextResponse.json({ error: `PSX returned ${res.status}` }, { status: 502 })
+    }
+
+    const html = await res.text()
+
+    // Strip HTML tags and normalise whitespace
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ')
+
+    // The PSX page renders: "[Name] [Sector] Rs.PRICE CHANGE (PCT%) ..."
+    // e.g. "National Bank of Pakistan COMMERCIAL BANKS Rs.176.12 0.33 (0.19%)"
+    const priceBlock = text.match(
+      /Rs\.\s*([\d,]+(?:\.\d+)?)\s+([-\d.]+)\s+\(([-\d.]+)%\)/
     )
-    if (res.ok) {
-      const text = await res.text()
-      // CSV: Symbol,Date,Time,Open,High,Low,Close,Volume,Name
-      const lines = text.trim().split('\n')
-      if (lines.length >= 2) {
-        const cols = lines[1].split(',')
-        const close = parseFloat(cols[6])
-        const open  = parseFloat(cols[3])
-        if (!isNaN(close) && close > 0) {
-          const change = close - open
-          const changePct = open > 0 ? (change / open) * 100 : 0
-          return NextResponse.json({
-            ticker: symbol,
-            price: close,
-            change: parseFloat(change.toFixed(2)),
-            changePct: parseFloat(changePct.toFixed(2)),
-            volume: parseInt(cols[7]) || null,
-            timestamp: new Date().toISOString(),
-            source: 'stooq',
-          })
-        }
-      }
-    }
-  } catch (_e) {}
 
-  const psxHeaders = {
-    'Accept': 'application/json, text/plain, */*',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Referer': 'https://dps.psx.com.pk/',
-    'Origin': 'https://dps.psx.com.pk',
+    if (!priceBlock) {
+      console.error(`[price/${symbol}] price block not found. snippet:`, text.slice(0, 500))
+      return NextResponse.json({ error: 'Price not found on PSX page' }, { status: 502 })
+    }
+
+    const price     = parseFloat(priceBlock[1].replace(/,/g, ''))
+    const change    = parseFloat(priceBlock[2])
+    const changePct = parseFloat(priceBlock[3])
+
+    // Extract LDCP (Last Day Closing Price) - appears as "LDCP 175.79" in stripped text
+    const ldcpMatch = text.match(/LDCP\s+([\d.]+)/)
+    const ldcp = ldcpMatch ? parseFloat(ldcpMatch[1]) : null
+
+    // Extract volume - appears as "Volume 5,254,338" in stripped text
+    const volMatch = text.match(/Volume\s+([\d,]+)/)
+    const volume = volMatch ? parseInt(volMatch[1].replace(/,/g, ''), 10) : null
+
+    return NextResponse.json({
+      ticker: symbol,
+      price,
+      change,
+      changePct,
+      ldcp,
+      volume,
+      timestamp: new Date().toISOString(),
+      source: 'psx',
+    })
+  } catch (e) {
+    console.error(`[price/${symbol}] error:`, e)
+    return NextResponse.json({ error: 'Failed to fetch from PSX' }, { status: 502 })
   }
-
-  // Try 2: PSX individual company endpoint
-  try {
-    const res = await fetch(`https://dps.psx.com.pk/api/v1/companies/${symbol}`, {
-      headers: psxHeaders,
-      next: { revalidate: 0 },
-    })
-    if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) {
-      const data = await res.json()
-      const price = data?.current ?? data?.ldcp ?? data?.close ?? null
-      if (price !== null) {
-        return NextResponse.json({
-          ticker: symbol,
-          price: Number(price),
-          change: data?.change ?? null,
-          changePct: data?.change_p ?? null,
-          volume: data?.volume ?? null,
-          timestamp: new Date().toISOString(),
-          source: 'psx',
-        })
-      }
-    }
-  } catch (_e) {}
-
-  // Try 3: PSX companies list
-  try {
-    const res = await fetch(`https://dps.psx.com.pk/api/v1/companies?symbol=${symbol}`, {
-      headers: psxHeaders,
-      next: { revalidate: 0 },
-    })
-    if (res.ok) {
-      const data = await res.json()
-      const list: Record<string, unknown>[] = Array.isArray(data)
-        ? data
-        : (data?.data ?? data?.companies ?? [])
-      const co = list.find(c => (c.symbol as string)?.toUpperCase() === symbol)
-      const price = co?.current ?? co?.ldcp ?? null
-      if (price !== null) {
-        return NextResponse.json({
-          ticker: symbol,
-          price: Number(price),
-          change: co?.change ?? null,
-          changePct: co?.change_p ?? null,
-          volume: co?.volume ?? null,
-          timestamp: new Date().toISOString(),
-          source: 'psx',
-        })
-      }
-    }
-  } catch (_e) {}
-
-  return NextResponse.json(
-    { error: `Could not fetch price for ${symbol}` },
-    { status: 502 }
-  )
 }
