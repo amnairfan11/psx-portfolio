@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import yahooFinance from 'yahoo-finance2'
 
 export async function GET(
   _request: Request,
@@ -9,8 +8,13 @@ export async function GET(
   const symbol = `${ticker.toUpperCase()}.KA`
 
   try {
-    const quote = await yahooFinance.quote(symbol, {}, { validateResult: false })
-    const price = quote.regularMarketPrice ?? null
+    // Dynamic import avoids ESM/CJS issues at build time
+    const yf = await import('yahoo-finance2')
+    const yahooFinance = yf.default
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const quote = await (yahooFinance.quote as any)(symbol)
+    const price: number | null = quote?.regularMarketPrice ?? null
 
     if (price === null) {
       return NextResponse.json({ error: 'Price not available' }, { status: 404 })
@@ -20,8 +24,8 @@ export async function GET(
       ticker: ticker.toUpperCase(),
       symbol,
       price,
-      currency: quote.currency ?? 'PKR',
-      marketState: quote.marketState ?? 'UNKNOWN',
+      currency: quote?.currency ?? 'PKR',
+      marketState: quote?.marketState ?? 'UNKNOWN',
       timestamp: new Date().toISOString(),
     })
   } catch (err) {
