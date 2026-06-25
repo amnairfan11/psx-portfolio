@@ -8,12 +8,11 @@ export async function GET(
   const symbol = `${ticker.toUpperCase()}.KA`
 
   try {
-    // Dynamic import avoids ESM/CJS issues at build time
-    const yf = await import('yahoo-finance2')
-    const yahooFinance = yf.default
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const quote = await (yahooFinance.quote as any)(symbol)
+    // Use require() so Turbopack leaves this to Node's native resolver
+    // (yahoo-finance2 is in serverExternalPackages in next.config.ts)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const yahooFinance = require('yahoo-finance2').default
+    const quote = await yahooFinance.quote(symbol)
     const price: number | null = quote?.regularMarketPrice ?? null
 
     if (price === null) {
