@@ -20,17 +20,14 @@ export function calcStock(stock: Stock) {
   const buyBrokRate = getBrokRate(stock, stock.avg_rate)
   const buyBrok     = stock.avg_rate * buyBrokRate * stock.shares
   const totalCost   = stock.avg_rate * stock.shares + buyBrok
-
   const gross        = stock.sell_price * stock.shares
   const sellBrokRate = getBrokRate(stock, stock.sell_price)
   const sellBrok     = stock.sell_price * sellBrokRate * stock.shares
   const netProceeds  = gross - sellBrok
-
   const pretax    = netProceeds - totalCost
   const tax       = pretax > 0 ? pretax * 0.15 : 0
   const netProfit = pretax - tax
   const netPct    = (netProfit / totalCost) * 100
-
   return { totalCost, buyBrok, gross, sellBrok, sellBrokRate, netProceeds, pretax, tax, netProfit, netPct }
 }
 
