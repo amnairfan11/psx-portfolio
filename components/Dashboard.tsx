@@ -108,7 +108,7 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
     if (failed.length === 0) {
       setRefreshStatus(`✓ Updated ${updated} stock${updated !== 1 ? 's' : ''} with live prices`)
     } else if (updated === 0) {
-      setRefreshStatus(`⚠ Could not fetch prices (market may be closed or tickers not on Yahoo Finance)`)
+      setRefreshStatus(`⚠ Could not fetch prices from PSX. Market may be closed or symbols unavailable.`)
     } else {
       setRefreshStatus(`✓ Updated ${updated} — could not fetch: ${failed.join(', ')}`)
     }
@@ -185,7 +185,6 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
               : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
           }`}>
             {refreshStatus}
-            <span className="text-xs ml-2 opacity-60">(data delayed ~15 min)</span>
           </div>
         )}
 
