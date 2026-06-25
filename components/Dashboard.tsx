@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { PlusCircle, LogOut, TrendingUp } from 'lucide-react'
+import { PlusCircle, LogOut, TrendingUp, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { calcStock, fmtPKR, fmtSigned, type Stock } from '@/lib/calc'
 import StockCard from './StockCard'
@@ -17,19 +17,21 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
   const router = useRouter()
   const supabase = createClient()
 
-  const [stocks, setStocks]     = useState<Stock[]>(initialStocks)
+  const [stocks, setStocks]       = useState<Stock[]>(initialStocks)
   const [showModal, setShowModal] = useState(false)
   const [editStock, setEditStock] = useState<Stock | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshStatus, setRefreshStatus] = useState<string | null>(null)
 
   // Portfolio totals
   const totals = stocks.reduce(
     (acc, s) => {
       const c = calcStock(s)
       return {
-        invested:   acc.invested   + c.totalCost,
-        netProfit:  acc.netProfit  + c.netProfit,
-        brokerage:  acc.brokerage  + c.buyBrok + c.sellBrok,
-        tax:        acc.tax        + c.tax,
+        invested:  acc.invested  + c.totalCost,
+        netProfit: acc.netProfit + c.netProfit,
+        brokerage: acc.brokerage + c.buyBrok + c.sellBrok,
+        tax:       acc.tax       + c.tax,
       }
     },
     { invested: 0, netProfit: 0, brokerage: 0, tax: 0 }
@@ -75,6 +77,46 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
     router.refresh()
   }
 
+  async function handleRefreshPrices() {
+    setRefreshing(true)
+    setRefreshStatus(null)
+
+    const results = await Promise.allSettled(
+      stocks.map(async (stock) => {
+        const res = await fetch(`/api/price/${stock.ticker}`)
+        if (!res.ok) throw new Error(`No price for ${stock.ticker}`)
+        const json = await res.json()
+        return { id: stock.id, ticker: stock.ticker, price: json.price as number }
+      })
+    )
+
+    let updated = 0
+    let failed: string[] = []
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        const { id, price } = result.value
+        handleUpdate(id, { sell_price: price })
+        updated++
+      } else {
+        const msg = result.reason?.message ?? ''
+        const ticker = msg.match(/No price for (.+)/)?.[1]
+        if (ticker) failed.push(ticker)
+      }
+    }
+
+    if (failed.length === 0) {
+      setRefreshStatus(`✓ Updated ${updated} stock${updated !== 1 ? 's' : ''} with live prices`)
+    } else if (updated === 0) {
+      setRefreshStatus(`⚠ Could not fetch prices (market may be closed or tickers not on Yahoo Finance)`)
+    } else {
+      setRefreshStatus(`✓ Updated ${updated} — could not fetch: ${failed.join(', ')}`)
+    }
+
+    setRefreshing(false)
+    setTimeout(() => setRefreshStatus(null), 5000)
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white">
       {/* Nav */}
@@ -110,10 +152,22 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
         </div>
 
         {/* Header row */}
-        <div className="flex items-center justify-between">
-          <h2 className="text-slate-300 text-sm font-medium">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-slate-300 text-sm font-medium flex-1">
             {stocks.length} stock{stocks.length !== 1 ? 's' : ''}
-          </h2>
+          </span>
+
+          {stocks.length > 0 && (
+            <button
+              onClick={handleRefreshPrices}
+              disabled={refreshing}
+              className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
+            >
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Fetching…' : 'Refresh Prices'}
+            </button>
+          )}
+
           <button
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
@@ -122,6 +176,18 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
             Add Stock
           </button>
         </div>
+
+        {/* Refresh status */}
+        {refreshStatus && (
+          <div className={`text-sm px-4 py-2.5 rounded-xl border ${
+            refreshStatus.startsWith('✓')
+              ? 'bg-green-500/10 border-green-500/20 text-green-400'
+              : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+          }`}>
+            {refreshStatus}
+            <span className="text-xs ml-2 opacity-60">(data delayed ~15 min)</span>
+          </div>
+        )}
 
         {/* Stock list */}
         {stocks.length === 0 ? (
@@ -151,17 +217,10 @@ export default function Dashboard({ initialStocks, userEmail }: Props) {
       </div>
 
       {showModal && (
-        <StockModal
-          onSave={handleAddStock}
-          onClose={() => setShowModal(false)}
-        />
+        <StockModal onSave={handleAddStock} onClose={() => setShowModal(false)} />
       )}
       {editStock && (
-        <StockModal
-          initial={editStock}
-          onSave={handleEditStock}
-          onClose={() => setEditStock(null)}
-        />
+        <StockModal initial={editStock} onSave={handleEditStock} onClose={() => setEditStock(null)} />
       )}
     </div>
   )
