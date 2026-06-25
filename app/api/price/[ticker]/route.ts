@@ -8,23 +8,33 @@ export async function GET(
   const symbol = `${ticker.toUpperCase()}.KA`
 
   try {
-    // Use require() so Turbopack leaves this to Node's native resolver
-    // (yahoo-finance2 is in serverExternalPackages in next.config.ts)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const yahooFinance = require('yahoo-finance2').default
-    const quote = await yahooFinance.quote(symbol)
-    const price: number | null = quote?.regularMarketPrice ?? null
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+      next: { revalidate: 0 }, // no caching — always fresh
+    })
 
-    if (price === null) {
-      return NextResponse.json({ error: 'Price not available' }, { status: 404 })
+    if (!res.ok) {
+      return NextResponse.json({ error: `Yahoo Finance returned ${res.status}` }, { status: 502 })
+    }
+
+    const data = await res.json()
+    const meta = data?.chart?.result?.[0]?.meta
+
+    if (!meta || meta.regularMarketPrice == null) {
+      return NextResponse.json({ error: 'Price not available for this ticker' }, { status: 404 })
     }
 
     return NextResponse.json({
       ticker: ticker.toUpperCase(),
       symbol,
-      price,
-      currency: quote?.currency ?? 'PKR',
-      marketState: quote?.marketState ?? 'UNKNOWN',
+      price: meta.regularMarketPrice as number,
+      currency: meta.currency ?? 'PKR',
+      marketState: meta.marketState ?? 'UNKNOWN',
+      previousClose: meta.previousClose ?? null,
       timestamp: new Date().toISOString(),
     })
   } catch (err) {
